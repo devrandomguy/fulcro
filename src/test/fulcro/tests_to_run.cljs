@@ -7,6 +7,7 @@
     fulcro.client.logging-spec
     fulcro.client.mutations-spec
     fulcro.client.network-spec
+    fulcro.client.om-upgrade-spec
     fulcro.client.routing-spec
     fulcro.client.util-spec
     fulcro.ui.forms-spec

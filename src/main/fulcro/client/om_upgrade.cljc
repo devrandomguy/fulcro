@@ -67,6 +67,7 @@
                (init-local-state component)
                component))))
         {:class     class
+         :queryid   (query-id class qualifier)
          :qualifier qualifier}))))
 
 #?(:cljs
@@ -113,6 +114,7 @@
                      :omcljs$depth      om/*depth*}
                 (util/force-children children)))))
         {:class     class
+         :queryid   (query-id class qualifier)
          :qualifier qualifier}))))
 
 (defn denormalize-query
@@ -156,9 +158,9 @@
 
 (defn link-element [element]
   (prewalk (fn [ele]
-            (if-let [{:keys [queryid]} (meta ele)]
-              queryid
-              ele)) element))
+             (if-let [{:keys [queryid]} (meta ele)]
+               queryid
+               ele)) element))
 
 (defn normalize-query-elements
   "Determines if there are query elements in the present query that need to be normalized as well. If so, it does so.
@@ -168,13 +170,13 @@
             (let [parameterized? (list? ele)
                   raw-element    (if parameterized? (first ele) ele)]
               (cond
-                (util/union? raw-element) (let [union-alternates (first (vals raw-element))
+                (util/union? raw-element) (let [union-alternates            (first (vals raw-element))
                                                 normalized-union-alternates (into {} (map link-element union-alternates))
-                                                union-query-id   (-> union-alternates meta :queryid)]
+                                                union-query-id              (-> union-alternates meta :queryid)]
                                             (assert union-query-id "Union query has an ID. Did you use extended get-query?")
                                             (futil/deep-merge
-                                              {::queries {union-query-id {:query  normalized-union-alternates
-                                                                          :id     union-query-id}}}
+                                              {::queries {union-query-id {:query normalized-union-alternates
+                                                                          :id    union-query-id}}}
                                               (reduce (fn [s [_ subquery]]
                                                         (normalize-query s subquery)) state union-alternates)))
                 (util/join? raw-element) (normalize-query state (util/join-value raw-element))
@@ -185,10 +187,10 @@
   "Find all of the elements (only at the top level) of the given query and replace them
   with their query ID"
   [query]
-  (into [] (map link-element) query))
+  (mapv link-element query))
 
 (defn normalize-query
-  "Given a state map and a query, returns a state map with the query normalized into the database. Queries fragments
+  "Given a state map and a query, returns a state map with the query normalized into the database. Query fragments
   that already appear in the state will not be added. "
   [state-map query]
   (let [new-state (normalize-query-elements state-map query)
@@ -197,3 +199,14 @@
       (futil/deep-merge {::queries {queryid {:query top-query
                                              :id    queryid}}} new-state)
       new-state)))
+
+(defn set-query* [state-map class-or-ui-factory {:keys [query params]}]
+  (if-let [queryid (if (contains? (meta class-or-ui-factory) :queryid)
+                     (some-> class-or-ui-factory meta :queryid)
+                     (query-id class-or-ui-factory nil))]
+    ; we have to dissoc the old one, because normalize won't overwrite by default
+    (normalize-query (update state-map ::queries dissoc queryid) (with-meta query {:queryid queryid}))
+    state-map))
+
+
+

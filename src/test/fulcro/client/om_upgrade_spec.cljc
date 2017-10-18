@@ -1,6 +1,12 @@
 (ns fulcro.client.om-upgrade-spec
   (:require [fulcro-spec.core :refer [specification behavior assertions provided component when-mocking]]
             [om.next :as om :refer [defui]]
+            [clojure.spec.alpha :as s]
+            [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as check]
+            [clojure.test.check.properties :as prop]
+            [clojure.test.check :as tc]
+            [clojure.spec.test.alpha :as check]
             [fulcro.client.om-upgrade :as om+]
     #?@(:cljs [[goog.object :as gobj]])
             ))
@@ -77,12 +83,33 @@
 
 (def ui-root (om+/factory Root))
 
-(specification "link-query" :focused
+(defui UnionChildAP
+  static om/IQuery
+  (query [this] '[(:L {:child-params 1})]))
+
+(def ui-ap (om+/factory UnionChildAP))
+
+(defui UnionP
+  static om/IQuery
+  (query [this] {:u1 (om+/get-query* this ui-ap)
+                 :u2 (om+/get-query* this ui-b)}))
+
+(def ui-unionp (om+/factory UnionP))
+
+(defui RootP
+  static om/IQuery
+  (query [this] `[:a
+                  ({:join ~(om+/get-query* this ui-child)} {:join-params 2})
+                  ({:union ~(om+/get-query* this ui-unionp)} {:union-params 3})]))
+
+(def ui-rootp (om+/factory RootP))
+
+(specification "link-query"
   (assertions
     "Replaces nested queries with their string ID"
     (om+/link-query (om+/get-query* {} ui-root)) => [:a {:join (om+/query-id Child nil)} {:union (om+/query-id Union nil)}]))
 
-(specification "normalize-query" :focused
+(specification "normalize-query"
   (let [union-child-a-id (om+/query-id UnionChildA nil)
         union-child-b-id (om+/query-id UnionChildB nil)
         child-id         (om+/query-id Child nil)
@@ -133,13 +160,114 @@
     (let [app-state (om+/normalize-query {} (om+/get-query* {} ui-root))
           app-state (assoc-in app-state [::om+/queries (om+/query-id UnionChildA nil) :query] [:UPDATED])]
       (assertions
-        (om+/get-query* app-state ui-root) => [:a {:join [:x]} {:union {:u1 [:UPDATED] :u2 [:M]}}]))
-    ))
+        (om+/get-query* app-state ui-root) => [:a {:join [:x]} {:union {:u1 [:UPDATED] :u2 [:M]}}]))))
+
+(specification "Normalization preserves query" :focused
+  (let [query               (om+/get-query* {} ui-root)
+        parameterized-query (om+/get-query* {} ui-rootp)
+        state               (om+/normalize-query {} query)
+        state-parameterized (om+/normalize-query {} parameterized-query)]
+    (assertions
+      "When parameters are not present"
+      (om+/get-query* state ui-root) => query
+      "When parameters are present"
+      (om+/get-query* state ui-rootp) => parameterized-query
+      ;"Property-based verification that queries are properly saved/retrieved"
+      ; TODO: THis would be a great property-based check if we had generators...
+      )))
+
+(specification "Setting a query" :focused
+  (let [query               (om+/get-query* {} ui-root)
+        parameterized-query (om+/get-query* {} ui-rootp)
+        state               (om+/normalize-query {} query)
+        state-modified      (om+/set-query* state ui-b {:query [:MODIFIED]})
+        expected-query      (assoc-in query [2 :union :u2 0] :MODIFIED)
+        state-modified-root (om+/set-query* state Root {:query [:b
+                                                                {:join (om+/get-query* state ui-child)}
+                                                                {:union (om+/get-query* state ui-union)}]})
+        expected-root-query (assoc query 0 :b)
+        state-parameterized (om+/normalize-query {} parameterized-query)]
+    (assertions
+      "Can update a node by factory"
+      (om+/get-query* state-modified ui-root) => expected-query
+      "Can update a node by class"
+      (om+/get-query* state-modified-root ui-root) => expected-root-query
+      ;"Property-based verification that queries are properly saved/retrieved"
+      ; TODO: THis would be a great property-based check if we had generators...
+      ))
+  )
 
 (comment
-  (-> (om+/get-query* {} ui-root) (om/query->ast) (clojure.pprint/pprint))
+  (-> (om+/get-query* {} ui-rootp) (om/query->ast) (clojure.pprint/pprint))
   (clojure.pprint/pprint (om/query->ast [:a {:j [:x]} {:u {:u1 [:l] :u2 [:m]}}])))
 
 
 
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Om Next query spec, with generators for property-based tests
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(comment
+  (defn anything? [x] true)
+  (def om-keyword? (s/with-gen
+                     keyword?
+                     #(s/gen #{:a :b :c :d :e :f :g :h})))
+  (def anything-gen #(s/gen #{"hello" 45 99.99 'abc -1 0 1 -1.0 0.0 1.0}))
+
+  (s/def ::ident-expr (s/tuple om-keyword? (s/with-gen anything? anything-gen)))
+
+  (def recur-gen #(s/gen #{'... 4 9 11}))
+  (def om-ident? (s/with-gen
+                   ::ident-expr
+                   #(s/gen #{[:x 1] [:y "hello"] [:boo/other 22] [:poo nil]})))
+  (def keyword-or-ident?
+    (s/with-gen
+      (s/or :keyword om-keyword? :ident om-ident?)
+      #(s/gen #{[:x 1] [:poo nil] [:b 44] :a :b :c :d})))
+
+  (s/def ::union-expr (s/with-gen (s/map-of om-keyword? ::query-root :gen-max 1 :count 1)
+                        #(gen/fmap (fn [v] (with-meta v {:queryid (futil/unique-key)})) (s/gen (s/map-of om-keyword? ::query-root :gen-max 1 :count 1)))))
+  (s/def ::recur-expr (s/with-gen
+                        (s/or :infinite #{'...} :to-depth (s/and number? pos? integer?))
+                        recur-gen))
+  (s/def ::join-expr (s/map-of keyword-or-ident?
+                       (s/or :root ::query-root :union ::union-expr :recur ::recur-expr)
+                       :gen-max 1 :count 1))
+  (s/def ::param-map-expr (s/map-of om-keyword? (s/with-gen anything? anything-gen) :gen-max 1 :count 1))
+  (s/def ::param-expr (s/cat :first ::plain-query-expr :second ::param-map-expr))
+  (s/def ::plain-query-expr (s/or :keyword om-keyword? :ident om-ident? :join ::join-expr))
+  (s/def ::query-expr (s/or :query ::plain-query-expr :parameterized ::param-expr))
+  (s/def ::query-root (s/with-gen (s/and vector?
+                                    (s/every ::query-expr :min-count 1))
+                        #(gen/fmap (fn [v] (with-meta v {:queryid (futil/unique-key)})) (gen/vector (s/gen ::query-expr)))))
+
+  (om/defui A)
+  (def f (factory A))
+
+  ; This property isn't holding, but I don't know if it is the spec generators not adding metadata correctly, or what
+  (def prop-marshall
+    (prop/for-all [v (s/gen ::query-root)]
+      (try
+        (= v (get-query* (normalize-query {} (gen/generate (s/gen ::query-root))) v))
+        (catch #?(:cljs :default :clj StackOverflowError) e
+          true)))))
+
+
+(comment
+  (tc/quick-check 10 prop-marshall)
+  (check/check (normalize-query {} (gen/generate (s/gen ::query-root))))
+  (let [expr (gen/generate (s/gen ::union-expr))]
+    (and (-> expr meta :queryid)
+      (every? (fn [[k v]]
+                (-> v meta :queryid)
+                ) expr)))
+
+  (gen/sample (s/gen ::query-root))
+  (gen/generate (s/gen ::join-expr))
+  (s/valid? ::query-root '[(:a {:x 1})])
+  (gen/sample (s/gen (s/cat :k om-keyword? :v (s/or :root ::query-root :union ::union-expr :recur ::recur-expr))))
+  (gen/sample (s/gen (s/or :n number? :s string?)))
+
+  (s/valid? ::param-expr '({:x [:a]} {:f 1})))

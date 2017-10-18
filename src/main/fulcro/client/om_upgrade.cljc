@@ -208,5 +208,79 @@
     (normalize-query (update state-map ::queries dissoc queryid) (with-meta query {:queryid queryid}))
     state-map))
 
+(defn gather-keys
+  "Gather the keys that would be considered part of the refresh set for the given query.
 
+  E.g. [:a {:j [:b]} {:u {:x [:l] :y [:k]}}] ==> #{:a :j :u}"
+  [query]
+  (cond
+    (vector? query) (reduce (fn [rv e]) query)
+    (util/union? query) (reduce (fn [[k v]]
+                                  ) query)
+    :else #{}))
+
+(defrecord Indexer [indexes]
+  #?(:clj  clojure.lang.IDeref
+     :cljs IDeref)
+  #?(:clj  (deref [_] @indexes)
+     :cljs (-deref [_] @indexes))
+
+  p/IIndexer
+  (index-root [this root-class]
+    (assert (:state this) "State map is send in this to indexer for indexing root")
+    (let [prop->classes (atom {})
+          state-map     (get this :state)
+          rootq         (get-query* state-map root-class)]
+      (prewalk (fn [ele]
+                 (when-let [component (some-> ele meta :component)]
+                   (let [ks (gather-keys ele)]
+                     (doseq [k ks]
+                       (swap! prop->classes update k (fnil conj #{}) component))))
+                 ele) rootq)
+      (swap! indexes merge {:prop->classes @prop->classes})))
+
+  (index-component! [_ c]
+    (swap! indexes
+      (fn [indexes]
+        (let [indexes (update-in indexes
+                        [:class->components (om/react-type c)]
+                        (fnil conj #{}) c)
+              ident   (when #?(:clj  (satisfies? om/Ident c)
+                               :cljs (implements? om/Ident c))
+                        (let [ident (om/ident c (om/props c))]
+                          (om/invariant (util/ident? ident)
+                            (str "malformed Ident. An ident must be a vector of "
+                              "two elements (a keyword and an EDN value). Check "
+                              "the Ident implementation of component `"
+                              (.. c -constructor -displayName) "`."))
+                          (om/invariant (some? (second ident))
+                            (str "component " (.. c -constructor -displayName)
+                              "'s ident (" ident ") has a `nil` second element."
+                              " This warning can be safely ignored if that is intended."))
+                          ident))]
+          (if-not (nil? ident)
+            (cond-> indexes
+              ident (update-in [:ref->components ident] (fnil conj #{}) c))
+            indexes)))))
+
+  (drop-component! [_ c]
+    (swap! indexes
+      (fn [indexes]
+        (let [indexes (update-in indexes [:class->components (om/react-type c)] disj c)
+              ident   (when #?(:clj  (satisfies? om/Ident c)
+                               :cljs (implements? om/Ident c))
+                        (om/ident c (om/props c)))]
+          (if-not (nil? ident)
+            (cond-> indexes
+              ident (update-in [:ref->components ident] disj c))
+            indexes)))))
+
+  (key->components [_ k]
+    (let [indexes @indexes]
+      (if (om/component? k)
+        #{k}
+        (transduce (map #(get-in indexes [:class->components %]))
+          (completing into)
+          (get-in indexes [:ref->components k] #{})
+          (get-in indexes [:prop->classes k]))))))
 

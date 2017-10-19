@@ -225,7 +225,7 @@
         remotes             (keys network-map)
         send-queues         (zipmap remotes (map #(async/chan 1024) remotes))
         response-channels   (zipmap remotes (map #(async/chan) remotes))
-        parser              (om/parser {:read (partial plumbing/read-local read-local) :mutate plumbing/write-entry-point})
+        parser              (om/parser {:elide-paths true :read (partial plumbing/read-local read-local) :mutate plumbing/write-entry-point})
         initial-app         (assoc app :send-queues send-queues :response-channels response-channels
                                        :parser parser :mounted? true)
         app-with-networking (assoc initial-app :networking (start-networking network-map))

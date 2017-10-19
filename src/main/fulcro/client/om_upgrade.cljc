@@ -1,6 +1,7 @@
 (ns fulcro.client.om-upgrade
   (:require [om.next :as om]
             [om.next.protocols :as p]
+            [om.next.impl.parser :as parser]
             [om.util :as util]
     #?@(:cljs [[om.next.cache :as c]
                [goog.object :as gobj]])
@@ -8,8 +9,7 @@
             [fulcro.client.logging :as log]
             [fulcro.client.util :as futil]
             [clojure.walk :refer [prewalk]]
-            [clojure.string :as str]
-            ))
+            [clojure.string :as str]))
 
 (defn query-id
   "Returns a string ID for the query of the given class with qualifier"
@@ -460,7 +460,8 @@
       (if (not (nil? remote))
         (swap! state assoc-in [:remote-queue remote] [])
         (swap! state assoc :queue []))
-      (if (empty? q)
+      "NOTES: I currently have elide-paths set in the parser via fulcro, and the incremental rendering turned off via this true:"
+      (if true                                              ; (empty? q) 3ms average keypress overhead with path-opt optimizations and incremental
         ;; TODO: need to move root re-render logic outside of batching logic
         ((:render st))
         (let [cs   (transduce

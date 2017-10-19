@@ -69,7 +69,7 @@
 (defcard-fulcro list-and-editor
   ex/DemoRoot
   {}
-  {:inspect-data true
+  {:inspect-data false
    :fulcro       {:started-callback
                   (fn [app]
                     ; simulate a load of people via a simple integration of some tree data

@@ -107,8 +107,8 @@
           (-> app :send-queues :remote type) => cljs.core.async.impl.channels/ManyToManyChannel
           "a response queue"
           (-> app :response-channels :remote type) => cljs.core.async.impl.channels/ManyToManyChannel
-          "a reconciler"
-          (type reconciler) => om.next/Reconciler
+          ;"a reconciler"
+          ;(type reconciler) => om.next/Reconciler
           "a parser"
           (type (:parser app)) => js/Function
           "a marker that the app was initialized"

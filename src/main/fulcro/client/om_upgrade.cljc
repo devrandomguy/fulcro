@@ -2,8 +2,7 @@
   (:require [om.next :as om]
             [om.next.protocols :as p]
             [om.util :as util]
-    #?@(:cljs [[goog.log :as glog]
-               [om.next.cache :as c]
+    #?@(:cljs [[om.next.cache :as c]
                [goog.object :as gobj]])
             [clojure.pprint :refer [pprint]]
             [fulcro.client.logging :as log]
@@ -273,15 +272,17 @@
               ident   (when #?(:clj  (satisfies? om/Ident c)
                                :cljs (implements? om/Ident c))
                         (let [ident (om/ident c (om/props c))]
-                          (om/invariant (util/ident? ident)
-                            (str "malformed Ident. An ident must be a vector of "
-                              "two elements (a keyword and an EDN value). Check "
-                              "the Ident implementation of component `"
-                              (.. c -constructor -displayName) "`."))
-                          (om/invariant (some? (second ident))
-                            (str "component " (.. c -constructor -displayName)
-                              "'s ident (" ident ") has a `nil` second element."
-                              " This warning can be safely ignored if that is intended."))
+                          (when-not (util/ident? ident)
+                            (log/info
+                              (str "malformed Ident. An ident must be a vector of "
+                                "two elements (a keyword and an EDN value). Check "
+                                "the Ident implementation of component `"
+                                (.. c -constructor -displayName) "`.")))
+                          (when-not (some? (second ident))
+                            (log/info
+                              (str "component " (.. c -constructor -displayName)
+                                "'s ident (" ident ") has a `nil` second element."
+                                " This warning can be safely ignored if that is intended.")))
                           ident))]
           (if-not (nil? ident)
             (cond-> indexes
@@ -337,7 +338,7 @@
           guid #?(:clj (java.util.UUID/randomUUID)
                   :cljs (random-uuid))]
       (when (om/iquery? root-class)
-        (p/index-root (:indexer config) root-class))
+        (p/index-root (assoc (:indexer config) :state (-> config :state deref)) root-class))
       (when (and (:normalize config)
               (not (:normalized @state)))
         (let [new-state (om/tree->db root-class @(:state config))
@@ -420,7 +421,7 @@
       (when (om/iquery? root)
         (let [indexer (:indexer config)
               c       (first (get-in @indexer [:class->components root]))]
-          (p/index-root indexer (or c root))))))
+          (p/index-root (assoc indexer :state (-> config :state deref)) (or c root))))))
 
   (queue! [this ks]
     (p/queue! this ks nil))
@@ -477,7 +478,7 @@
                          next-props     (when-not force-root? (om.next/computed next-raw-props computed))]
                      (if force-root?
                        (do
-                         (glog/fine "Re-render was forced from root because an out-of-date component had no ident: " (om/react-type c))
+                         (log/debug "Re-render was forced from root because an out-of-date component had no ident: " (om/react-type c))
                          ; This will update our t on the rest of components so that the basis comparison above will short-circuit the rest
                          ((:render st)))
                        (do
@@ -623,4 +624,79 @@
                                :target       nil :root nil :render nil :remove nil
                                :t            0 :normalized norm?}))]
     ret))
+
+(defn transact* [r c ref tx]
+  (let [cfg        (:config r)
+        ref        (if (and c #?(:clj  (satisfies? om/Ident c)
+                                 :cljs (implements? om/Ident c)) (not ref))
+                     (om/ident c (om/props c))
+                     ref)
+        env        (merge
+                     (#'om/to-env cfg)
+                     {:reconciler r :component c}
+                     (when ref
+                       {:ref ref}))
+        id #?(:clj (java.util.UUID/randomUUID)
+              :cljs (random-uuid))
+        #?@(:cljs
+            [_ (.add (:history cfg) id @(:state cfg))
+             ])
+        old-state  @(:state cfg)
+        v          ((:parser cfg) env tx)
+        snds       (om/gather-sends env tx (:remotes cfg))
+        xs         (cond-> []
+                     (not (nil? c)) (conj c)
+                     (not (nil? ref)) (conj ref))]
+    (p/queue! r (into xs (remove symbol?) (keys v)))
+    (when-not (empty? snds)
+      (doseq [[remote _] snds]
+        (p/queue! r xs remote))
+      (p/queue-sends! r snds)
+      (om/schedule-sends! r))
+    (when-let [f (:tx-listen cfg)]
+      (let [tx-data (merge env
+                      {:old-state old-state
+                       :new-state @(:state cfg)})]
+        (f tx-data {:tx    tx
+                    :ret   v
+                    :sends snds})))
+    v))
+
+(defn transact!
+  "Given a reconciler or component run a transaction. tx is a parse expression
+   that should include mutations followed by any necessary read. The reads will
+   be used to trigger component re-rendering.
+
+   Example:
+
+     (om/transact! widget
+       '[(do/this!) (do/that!)
+         :read/this :read/that])"
+  ([x tx]
+   {:pre [(or (om/component? x)
+            (om/reconciler? x))
+          (vector? tx)]}
+   (let [tx (cond-> tx
+              (and (om/component? x) (satisfies? om/Ident x))
+              (om/annotate-mutations (om/get-ident x)))]
+     (cond
+       (om/reconciler? x) (transact* x nil nil tx)
+       (not (om/iquery? x)) (do
+                              (when (om/some-iquery? x) (log/error
+                                                          (str "transact! should be called on a component"
+                                                            "that implements IQuery or has a parent that"
+                                                            "implements IQuery")))
+                              (transact* (om/get-reconciler x) nil nil tx))
+       :else (do
+               (loop [p (#'om/parent x) x x tx tx]
+                 (if (nil? p)
+                   (let [r (om/get-reconciler x)]
+                     (transact* r x nil tx))
+                   (let [[x' tx] (if #?(:clj  (satisfies? om/ITxIntercept p)
+                                        :cljs (implements? om/ITxIntercept p))
+                                   [p (om/tx-intercept p tx)]
+                                   [x tx])]
+                     (recur (#'om/parent p) x' tx))))))))
+  ([r ref tx]
+   (transact* r nil ref tx)))
 

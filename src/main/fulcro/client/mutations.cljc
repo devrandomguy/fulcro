@@ -4,6 +4,7 @@
     [clojure.spec.alpha :as s]
     [om.next :as om]
     [fulcro.client.util :refer [conform!]]
+    [fulcro.client.om-upgrade :as om+]
     [fulcro.client.logging :as log]
     [fulcro.i18n :as i18n]
     #?(:cljs [cljs.loader :as loader])))
@@ -149,13 +150,13 @@
   "Toggle the given boolean `field` on the specified component. It is recommended you use this function only on
   UI-related data (e.g. form checkbox checked status) and write clear top-level transactions for anything more complicated."
   [comp field]
-  (om/transact! comp `[(toggle {:field ~field})]))
+  (om+/transact! comp `[(toggle {:field ~field})]))
 
 (defn set-value!
   "Set a raw value on the given `field` of a `component`. It is recommended you use this function only on
   UI-related data (e.g. form inputs that are used by the UI, and not persisted data)."
   [component field value]
-  (om/transact! component `[(set-props ~{field value})]))
+  (om+/transact! component `[(set-props ~{field value})]))
 
 #?(:cljs
    (defn- ensure-integer

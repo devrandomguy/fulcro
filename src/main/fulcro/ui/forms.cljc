@@ -11,6 +11,7 @@
     [clojure.tools.reader :as reader]
     [clojure.spec.alpha :as s]
     [fulcro.client.core :as fc]
+    [fulcro.client.om-upgrade :as om+]
     [fulcro.client.util :as uu :refer [conform!]]
     [fulcro.client.data-fetch :as df]
     [fulcro.client.logging :as log]
@@ -897,7 +898,7 @@
    own transaction (so your mutation can see the validated form), you may use the underlying
    `(f/validate-form {:form-id fident})` mutation in your own call to `transact!`."
   [comp-or-reconciler form & {:as opts}]
-  (om/transact! comp-or-reconciler
+  (om+/transact! comp-or-reconciler
     `[(validate-form ~(merge opts {:form-id (form-ident form)}))
       ~form-root-key]))
 
@@ -946,7 +947,7 @@
                                 :value       input-value
                                 :placeholder (placeholder form field-name)
                                 :onBlur      (fn [_]
-                                               (om/transact! component
+                                               (om+/transact! component
                                                  `[(validate-field
                                                      ~{:form-id id :field field-name})
                                                    ~@(get-on-form-change-mutation form field-name :blur)
@@ -956,7 +957,7 @@
                                                      field-info {:form-id id
                                                                  :field   field-name
                                                                  :value   value}]
-                                                 (om/transact! component
+                                                 (om+/transact! component
                                                    `[(set-field ~field-info)
                                                      ~@(get-on-form-change-mutation form field-name :edit)
                                                      ~form-root-key])))}))]
@@ -1014,7 +1015,7 @@
                             field-info {:form-id form-id
                                         :field   field-name
                                         :value   value}]
-                        (om/transact! component
+                        (om+/transact! component
                           `[(select-option ~field-info)
                             ~@(get-on-form-change-mutation form field-name :edit)
                             ~form-root-key])
@@ -1043,7 +1044,7 @@
                                      field-info {:form-id form-id
                                                  :field   field-name
                                                  :value   value}]
-                                 (om/transact! component
+                                 (om+/transact! component
                                    `[(toggle-field ~field-info)
                                      ~@(get-on-form-change-mutation form field-name :edit)
                                      ~form-root-key])))})))))
@@ -1071,7 +1072,7 @@
                               field-info {:form-id id
                                           :field   field-name
                                           :value   (reader/read-string value)}]
-                          (om/transact! component
+                          (om+/transact! component
                             `[(set-field ~field-info)
                               ~@(get-on-form-change-mutation form field-name :edit)
                               ~form-root-key])))})
@@ -1087,7 +1088,7 @@
                             :className cls
                             :value     value
                             :onBlur    (fn [_]
-                                         (om/transact! component
+                                         (om+/transact! component
                                            `[(validate-field ~{:form-id form-id :field field-name})
                                              ~@(get-on-form-change-mutation form field-name :blur)
                                              ~form-root-key]))
@@ -1096,7 +1097,7 @@
                                                field-info {:form-id form-id
                                                            :field   field-name
                                                            :value   value}]
-                                           (om/transact! component
+                                           (om+/transact! component
                                              `[(set-field ~field-info)
                                                ~@(get-on-form-change-mutation form field-name :edit)
                                                ~form-root-key])))}))]
@@ -1210,7 +1211,7 @@
    You may compose your own Om transactions and use `(f/reset-from-entity {:form-id [:entity id]})` directly."
   [comp-or-reconciler form]
   (let [form-id (form-ident form)]
-    (om/transact! comp-or-reconciler
+    (om+/transact! comp-or-reconciler
       `[(reset-from-entity ~{:form-id form-id})
         ~form-root-key])))
 
@@ -1256,5 +1257,5 @@
                       (not is-valid?) (conj `(validate-form ~{:form-id (form-ident form)}))
                       (seq rerender) (into rerender)
                       :always (conj form-root-key))]
-      (om/transact! component tx))))
+      (om+/transact! component tx))))
 

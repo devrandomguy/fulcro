@@ -3,12 +3,14 @@
             [om.next.protocols :as p]
             [om.util :as util]
     #?@(:cljs [[goog.log :as glog]
+               [om.next.cache :as c]
                [goog.object :as gobj]])
             [clojure.pprint :refer [pprint]]
             [fulcro.client.logging :as log]
             [fulcro.client.util :as futil]
             [clojure.walk :refer [prewalk]]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            ))
 
 (defn query-id
   "Returns a string ID for the query of the given class with qualifier"
@@ -526,4 +528,99 @@
              (om/merge! this resp query remote)
              (p/reconcile! this remote))))))))
 
+
+
+(defn reconciler
+  "Construct a reconciler from a configuration map.
+
+   Required parameters:
+     :state        - the application state. If IAtom value is not supplied the
+                     data will be normalized into the default database format
+                     using the root query. This can be disabled by explicitly
+                     setting the optional :normalize parameter to false.
+     :parser       - the parser to be used
+
+   Optional parameters:
+     :shared       - a map of global shared properties for the component tree.
+     :shared-fn    - a function to compute global shared properties from the root props.
+                     the result is merged with :shared.
+     :send         - required only if the parser will return a non-empty value when
+                     run against the supplied :remotes. send is a function of two
+                     arguments, the map of remote expressions keyed by remote target
+                     and a callback which should be invoked with the result from each
+                     remote target. Note this means the callback can be invoked
+                     multiple times to support parallel fetching and incremental
+                     loading if desired. The callback should take the response as the
+                     first argument and the the query that was sent as the second
+                     argument.
+     :normalize    - whether the state should be normalized. If true it is assumed
+                     all novelty introduced into the system will also need
+                     normalization.
+     :remotes      - a vector of keywords representing remote services which can
+                     evaluate query expressions. Defaults to [:remote]
+     :root-render  - the root render function. Defaults to ReactDOM.render
+     :root-unmount - the root unmount function. Defaults to
+                     ReactDOM.unmountComponentAtNode
+     :logger       - supply a goog.log compatible logger
+     :tx-listen    - a function of 2 arguments that will listen to transactions.
+                     The first argument is the parser's env map also containing
+                     the old and new state. The second argument is a map containing
+                     the transaction, its result and the remote sends that the
+                     transaction originated."
+  [{:keys [state shared shared-fn
+           parser normalize
+           send merge-sends remotes
+           merge merge-tree merge-ident
+           prune-tree
+           optimize
+           history
+           root-render root-unmount
+           migrate id-key
+           instrument tx-listen
+           easy-reads]
+    :or   {merge-sends  #(merge-with into %1 %2)
+           remotes      [:remote]
+           merge        om/default-merge
+           merge-tree   om/default-merge-tree
+           merge-ident  om/default-merge-ident
+           prune-tree   om/default-extract-errors
+           optimize     (fn [cs] (sort-by om/depth cs))
+           history      100
+           root-render  #?(:clj  (fn [c target] c)
+                           :cljs #(js/ReactDOM.render %1 %2))
+           root-unmount #?(:clj  (fn [x])
+                           :cljs #(js/ReactDOM.unmountComponentAtNode %))
+           migrate      om/default-migrate
+           easy-reads   true}
+    :as   config}]
+  {:pre [(map? config)]}
+  (let [idxr          (map->Indexer {:indexes (atom {})})
+        norm? #?(:clj (instance? clojure.lang.Atom state)
+                 :cljs (satisfies? IAtom state))
+        state'        (if norm? state (atom state))
+        logger        (if (contains? config :logger)
+                        (:logger config)
+                        #?(:cljs om/*logger*))
+        ret           (Reconciler.
+                        {:state       state' :shared shared :shared-fn shared-fn
+                         :parser      parser :indexer idxr
+                         :send        send :merge-sends merge-sends :remotes remotes
+                         :merge       merge :merge-tree merge-tree :merge-ident merge-ident
+                         :prune-tree  prune-tree
+                         :optimize    optimize
+                         :normalize   (or (not norm?) normalize)
+                         :history     #?(:clj  []
+                                         :cljs (c/cache history))
+                         :root-render root-render :root-unmount root-unmount
+                         :logger      logger :pathopt true
+                         :migrate     migrate :id-key id-key
+                         :instrument  instrument :tx-listen tx-listen
+                         :easy-reads  easy-reads}
+                        (atom {:queue        []
+                               :remote-queue {}
+                               :queued       false :queued-sends {}
+                               :sends-queued false
+                               :target       nil :root nil :render nil :remove nil
+                               :t            0 :normalized norm?}))]
+    ret))
 

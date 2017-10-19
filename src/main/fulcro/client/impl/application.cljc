@@ -1,6 +1,7 @@
 (ns fulcro.client.impl.application
   (:require [fulcro.client.logging :as log]
             [om.next :as om]
+            [fulcro.client.om-upgrade :as om+]
             om.util
             [fulcro.i18n :as i18n]
             [fulcro.client.impl.data-fetch :as f]
@@ -285,7 +286,7 @@
                                      :merge-tree  (fn [target source]
                                                     (merge-handler mutation-merge target source))
                                      :parser      parser})
-        rec                       (om/reconciler config)]
+        rec                       (om+/reconciler config)]
     (reset! rec-atom rec)
     rec))
 

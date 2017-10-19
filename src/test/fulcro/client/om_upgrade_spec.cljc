@@ -9,7 +9,7 @@
             [clojure.spec.test.alpha :as check]
             [fulcro.client.om-upgrade :as om+]
     #?@(:cljs [[goog.object :as gobj]])
-            ))
+            [om.next.protocols :as p]))
 
 (defui A)
 
@@ -51,6 +51,8 @@
 (def ui-q (om+/factory Q))
 
 (defui UnionChildA
+  static om/Ident
+  (ident [this props] [:union-child/by-id (:L props)])
   static om/IQuery
   (query [this] [:L]))
 
@@ -137,7 +139,7 @@
                          child-id         {:query [:x]
                                            :id    child-id}}})))
 
-(specification "get-query*" :focused
+(specification "get-query*"
   (assertions
     "Obtains the static query from a given class"
     (om+/get-query* Q) => [:a :b]
@@ -162,7 +164,7 @@
       (assertions
         (om+/get-query* app-state ui-root) => [:a {:join [:x]} {:union {:u1 [:UPDATED] :u2 [:M]}}]))))
 
-(specification "Normalization preserves query" :focused
+(specification "Normalization preserves query"
   (let [query               (om+/get-query* {} ui-root)
         parameterized-query (om+/get-query* {} ui-rootp)
         state               (om+/normalize-query {} query)
@@ -176,7 +178,7 @@
       ; TODO: THis would be a great property-based check if we had generators...
       )))
 
-(specification "Setting a query" :focused
+(specification "Setting a query"
   (let [query               (om+/get-query* {} ui-root)
         parameterized-query (om+/get-query* {} ui-rootp)
         state               (om+/normalize-query {} query)
@@ -194,15 +196,74 @@
       (om+/get-query* state-modified-root ui-root) => expected-root-query
       ;"Property-based verification that queries are properly saved/retrieved"
       ; TODO: THis would be a great property-based check if we had generators...
-      ))
-  )
+      )))
+
+(specification "Indexing" :focused
+  (component "Gathering keys for a query"
+    (assertions
+      "finds the correct prop keys (without parameters)"
+      (om+/gather-keys (om+/get-query* {} ui-root)) => #{:a :join :union}
+      (om+/gather-keys (om+/get-query* {} ui-union)) => #{:u1 :u2}
+      (om+/gather-keys (om+/get-query* {} ui-a)) => #{:L}
+      (om+/gather-keys (om+/get-query* {} ui-b)) => #{:M}
+      (om+/gather-keys (om+/get-query* {} ui-child)) => #{:x}
+      "finds the correct prop keys (with parameters)"
+      (om+/gather-keys (om+/get-query* {} ui-rootp)) => #{:a :join :union}
+      (om+/gather-keys (om+/get-query* {} ui-ap)) => #{:L}
+      (om+/gather-keys (om+/get-query* {} ui-unionp)) => #{:u1 :u2}))
+  (component "Indexer"
+    (let [indexer (om+/map->Indexer {:indexes (atom {})})
+          indexer (assoc indexer :state {})]
+
+      (p/index-root indexer Root)
+
+      (assertions
+        "Properly indexes components"
+        (-> indexer :indexes deref :prop->classes :L) => #{UnionChildA}
+        (-> indexer :indexes deref :prop->classes :M) => #{UnionChildB}
+        (-> indexer :indexes deref :prop->classes :a) => #{Root}
+        (-> indexer :indexes deref :prop->classes :join) => #{Root}
+        (-> indexer :indexes deref :prop->classes :union) => #{Root}
+        ))
+    (let [indexer (om+/map->Indexer {:indexes (atom {})})
+          indexer (assoc indexer :state {})]
+
+      (p/index-root indexer RootP)
+
+      (assertions
+        "Properly indexes components that have parameterized queries"
+        (-> indexer :indexes deref :prop->classes :L) => #{UnionChildAP}
+        (-> indexer :indexes deref :prop->classes :M) => #{UnionChildB}
+        (-> indexer :indexes deref :prop->classes :a) => #{RootP}
+        (-> indexer :indexes deref :prop->classes :join) => #{RootP}
+        (-> indexer :indexes deref :prop->classes :union) => #{RootP}))
+    (let [indexer   (om+/map->Indexer {:indexes (atom {})})
+          id        [:union-child/by-id 1]
+          id-2      [:union-child/by-id 2]
+          element   (ui-a {:L 1})
+          element-2 (ui-a {:L 2})]
+
+      (p/index-component! indexer element)
+      (p/index-component! indexer element-2)
+
+      #?(:cljs (js/console.log id ":  " (-> indexer :indexes deref)))
+
+      (let [ident-elements    (-> indexer :indexes deref :ref->components (get id))
+            class-elements    (-> indexer :indexes deref :class->components (get UnionChildA))
+            expected-ident    #{element}
+            expected-by-class #{element element-2}
+            ok-1              (= ident-elements expected-ident)
+            ok-2              (= class-elements expected-by-class)]
+        (assertions
+          "Adds component idents to the ref->components index when indexing the component"
+          (count ident-elements) => 1
+          "Adds the component to the index of :class->components"
+          (count class-elements) => 2
+          )))))
 
 (comment
   (-> (om+/get-query* {} ui-rootp) (om/query->ast) (clojure.pprint/pprint))
   (clojure.pprint/pprint (om/query->ast [:a {:j [:x]} {:u {:u1 [:l] :u2 [:m]}}])))
-
-
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Om Next query spec, with generators for property-based tests

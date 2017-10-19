@@ -2,6 +2,7 @@
   (:require [om.next :as om]
             [om.next.protocols :as p]
             [om.util :as util]
+    #?(:cljs goog.log)
             [clojure.pprint :refer [pprint]]
             [fulcro.client.logging :as log]
             [fulcro.client.util :as futil]
@@ -214,9 +215,14 @@
   E.g. [:a {:j [:b]} {:u {:x [:l] :y [:k]}}] ==> #{:a :j :u}"
   [query]
   (cond
-    (vector? query) (reduce (fn [rv e]) query)
-    (util/union? query) (reduce (fn [[k v]]
-                                  ) query)
+    (vector? query) (reduce (fn [rv e]
+                              (cond
+                                (keyword? e) (conj rv e)
+                                (and (list? e) (keyword? (first e))) (conj rv (first e))
+                                (and (util/join? e) (keyword? (util/join-key e))) (conj rv (util/join-key e))
+                                :else rv))
+                      #{} query)
+    (map? query) (-> query keys set) ; a union component, which has a map for a query
     :else #{}))
 
 (defrecord Indexer [indexes]
@@ -227,10 +233,10 @@
 
   p/IIndexer
   (index-root [this root-class]
-    (assert (:state this) "State map is send in this to indexer for indexing root")
+    (assert (:state this) "State map is in `this` for indexing root")
     (let [prop->classes (atom {})
           state-map     (get this :state)
-          rootq         (get-query* state-map root-class)]
+          rootq         (get-query* state-map (factory root-class nil))]
       (prewalk (fn [ele]
                  (when-let [component (some-> ele meta :component)]
                    (let [ks (gather-keys ele)]
